@@ -33,8 +33,13 @@ OFFSETS = {
     "naghdi_sell": 13_000,
 }
 
-TETHER_BUY = "0.74"
-TETHER_SELL = "0.82"
+# نرخ تتر به پوند: خرید = نرخ دلار به پوند (گرد شده به 2 رقم)، فروش = خرید + 0.08
+TETHER_SPREAD = 0.08
+TETHER_FALLBACK_BUY = 0.74  # اگر نرخ زنده گرفته نشد (و به ادمین خبر داده می‌شود)
+FX_URLS = [
+    ("https://open.er-api.com/v6/latest/USD", lambda d: d["rates"]["GBP"]),
+    ("https://api.frankfurter.app/latest?from=USD&to=GBP", lambda d: d["rates"]["GBP"]),
+]
 PHONE = "+447918427402"
 
 PRICE_URL = "https://www.tgju.org/profile/price_gbp"
@@ -133,6 +138,32 @@ def get_price_rial() -> int:
     return v
 
 
+def get_usd_gbp():
+    """چند پوند برای هر 1 دلار (تتر ~ دلار). در صورت خطا None."""
+    for url, pick in FX_URLS:
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=30)
+            r.raise_for_status()
+            v = float(pick(r.json()))
+            if 0.3 < v < 2:
+                print(f"[fx] {url} -> {v}")
+                return v
+        except Exception as e:  # noqa: BLE001
+            print(f"[fx] failed {url}: {e}")
+    return None
+
+
+def tether_rates():
+    v = get_usd_gbp()
+    if v is None:
+        notify_admin("⚠️ نرخ دلار به پوند گرفته نشد؛ نرخ تتر پیش‌فرض ارسال شد.")
+        buy = TETHER_FALLBACK_BUY
+    else:
+        buy = round(v, 2)
+    sell = round(buy + TETHER_SPREAD, 2)
+    return f"{buy:.2f}", f"{sell:.2f}"
+
+
 # ----------------------------------------------------------------- محاسبه
 def compute_prices(price_rial: int) -> dict:
     rounded_rial = (price_rial // ROUND_STEP_RIAL) * ROUND_STEP_RIAL
@@ -172,7 +203,7 @@ def date_header(now: datetime) -> str:
     return f"{now.strftime('%A %d %B %Y')}\n{fa}"
 
 
-def build_price_message(now: datetime, p: dict) -> str:
+def build_price_message(now: datetime, p: dict, tether_buy: str, tether_sell: str) -> str:
     return f"""{date_header(now)}
 
 خرید و فروش پوند در کاونتری
@@ -187,8 +218,8 @@ def build_price_message(now: datetime, p: dict) -> str:
 
 ❗️خرید نقدی/حسابی زیر ۱٫۰۰۰ پوند شامل ۵ پوند کارمزد می‌باشد.
 
-🔹خرید تتر به پوند: {TETHER_BUY}
-🔹فروش تتر به پوند: {TETHER_SELL}
+🔹خرید تتر به پوند: {tether_buy}
+🔹فروش تتر به پوند: {tether_sell}
 مبلغ زیر ۱۰۰۰ تتر، شامل ۱۰ تتر کارمزد می‌باشد.
 
 ساعت کار :
@@ -256,7 +287,9 @@ def main() -> int:
         price = get_price_rial()
         p = compute_prices(price)
         print(f"site={price} rounded={p['rounded_rial']} base_toman={p['base_toman']}")
-        tg_send(CHANNEL, build_price_message(now, p))
+        tb, ts = tether_rates()
+        print(f"tether buy={tb} sell={ts}")
+        tg_send(CHANNEL, build_price_message(now, p, tb, ts))
         print("price message sent.")
         return 0
     except Exception as e:  # noqa: BLE001

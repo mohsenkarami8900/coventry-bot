@@ -1,0 +1,36 @@
+name: Daily GBP price
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "فقط تست (ارسال نکن)"
+        default: "1"
+      force_run:
+        description: "نادیده گرفتن ساعت 10 (1 = بله)"
+        default: "1"
+      manual_price_rial:
+        description: "قیمت دستی به ریال (اختیاری)"
+        default: ""
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+          CHANNEL: "@Coventryexchange"
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          FORCE_RUN: ${{ github.event.inputs.force_run }}
+          MANUAL_PRICE_RIAL: ${{ github.event.inputs.manual_price_rial }}
+        run: python bot.py

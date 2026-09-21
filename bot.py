@@ -59,13 +59,16 @@ HEADERS = {
 # نکته‌های کوتاه برای یکشنبه‌ها (اگر نخواستید، USE_TIPS را False کنید)
 USE_TIPS = True
 TIPS = [
-    "سرمایه‌گذاری موفق یعنی صبر؛ تصمیم‌های هیجانی معمولاً گران تمام می‌شوند.",
-    "همه تخم‌مرغ‌ها را در یک سبد نگذارید؛ تنوع، ریسک را کم می‌کند.",
-    "بازار بالا و پایین می‌شود؛ نقشه‌ی مشخص داشتن مهم‌تر از پیش‌بینی قیمت است.",
-    "فقط با پولی سرمایه‌گذاری کنید که در کوتاه‌مدت به آن نیاز ندارید.",
-    "ترس و طمع دو دشمن اصلی سرمایه‌گذارند؛ با برنامه تصمیم بگیرید نه با احساس.",
-    "خرید و فروش منظم و تدریجی، از تصمیم‌گیری در بدترین لحظه بهتر است.",
-    "قبل از هر معامله، سود و زیان قابل تحمل خود را مشخص کنید.",
+    ("Be fearful when others are greedy, and greedy when others are fearful.", "Warren Buffett"),
+    ("Risk comes from not knowing what you're doing.", "Warren Buffett"),
+    ("The four most dangerous words in investing are: 'This time it's different.'", "Sir John Templeton"),
+    ("Know what you own, and know why you own it.", "Peter Lynch"),
+    ("An investment in knowledge pays the best interest.", "Benjamin Franklin"),
+    ("The stock market is a device for transferring money from the impatient to the patient.", "Warren Buffett"),
+    ("Price is what you pay. Value is what you get.", "Warren Buffett"),
+    ("Rule No. 1: Never lose money. Rule No. 2: Never forget rule No. 1.", "Warren Buffett"),
+    ("In investing, what is comfortable is rarely profitable.", "Robert Arnott"),
+    ("The individual investor should act consistently as an investor and not as a speculator.", "Benjamin Graham"),
 ]
 
 PERSIAN_WEEKDAYS = {
@@ -238,8 +241,8 @@ https://t.me/Coventryexchange"""
 def build_closed_message(now: datetime) -> str:
     msg = f"{date_header(now)}\n\nامروز صرافی تعطیل است.\nقیمت‌ها از فردا (دوشنبه) ساعت 10:00 اعلام می‌شود."
     if USE_TIPS:
-        tip = TIPS[now.toordinal() % len(TIPS)]
-        msg += f"\n\n💡 {tip}"
+        quote, author = TIPS[now.toordinal() % len(TIPS)]
+        msg += f'\n\n💡 "{quote}"\n— {author}'
     msg += "\n\nhttps://t.me/Coventryexchange"
     return msg
 

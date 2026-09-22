@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """ربات کانال Coventryexchange - ارسال روزانه قیمت پوند.
 
-دو حالت اجرا (با متغیر محیطی MODE مشخص می‌شود):
-  - MODE=text  (ساعت 10:00 لندن): پیام متنی با قیمت‌ها و نرخ تتر
-      دوشنبه تا شنبه: پیام قیمت | یکشنبه: پیام تعطیلی (+ نکته کوتاه)
-  - MODE=image (ساعت 10:30 لندن): عکس نرخ روزانه (از روی قالب assets/template.png)
-      یکشنبه‌ها عکسی ارسال نمی‌شود (صرافی تعطیل است)
+با متغیر محیطی MODE مشخص می‌شود (پیش‌فرض: both):
+  - MODE=both  (اجرای روزانه‌ی واقعی، ساعت 10:00 لندن): قیمت را یک‌بار می‌خواند،
+      فوراً پیام متنی را می‌فرستد، تا ساعت 10:30 صبر می‌کند و بعد عکس را
+      با همان قیمتِ محاسبه‌شده (نه یک قیمتِ تازه) می‌فرستد. این‌طوری پیام متنی
+      و عکس همیشه یک قیمت دارند.
+  - MODE=text  : فقط پیام متنی (برای تست دستی)
+  - MODE=image : فقط عکس، با قیمتِ لحظه‌ی اجرا (برای تست دستی)
+  یکشنبه‌ها (در هر MODE): فقط پیام تعطیلی فرستاده می‌شود، نه قیمت و نه عکس.
 """
 import os
 import re
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -24,9 +28,11 @@ ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")  # اختیاری: خطاه�
 MANUAL_PRICE_RIAL = os.environ.get("MANUAL_PRICE_RIAL", "").strip()  # اختیاری: قیمت دستی به ریال
 FORCE_RUN = os.environ.get("FORCE_RUN", "") == "1"  # نادیده گرفتن چک ساعت 10
 DRY_RUN = os.environ.get("DRY_RUN", "") == "1"  # فقط چاپ کن، ارسال نکن
-MODE = os.environ.get("MODE", "text").strip().lower()  # text یا image
+MODE = (os.environ.get("MODE", "").strip().lower() or "both")  # both / text / image
 
 SEND_HOUR = 10
+IMAGE_HOUR = 10
+IMAGE_MINUTE = 30
 TZ = ZoneInfo("Europe/London")
 
 ROUND_STEP_RIAL = 10_000          # رند به پایین تا نزدیک‌ترین 10,000 ریال
@@ -97,34 +103,42 @@ def _plausible(v: int) -> bool:
     return 1_000_000 <= v <= 20_000_000
 
 
-def fetch_from_ajax():
+def fetch_ajax_value(field_keys):
+    """یک مقدار از price_gbp در ajax.json می‌خواند؛ اولین کلیدی از field_keys که پیدا شود."""
     for url in AJAX_URLS[:2]:
         try:
             r = requests.get(url, headers=HEADERS, timeout=30)
             r.raise_for_status()
             data = r.json()
             node = data.get("current", data).get("price_gbp")
-            if node and node.get("p"):
-                v = _to_int(node["p"])
-                if _plausible(v):
-                    print(f"[price] {url} -> {v}")
-                    return v
+            if node:
+                for key in field_keys:
+                    val = node.get(key)
+                    if val:
+                        v = _to_int(val)
+                        if _plausible(v):
+                            print(f"[price] {url} ({key}) -> {v}")
+                            return v
         except Exception as e:  # noqa: BLE001
             print(f"[price] ajax failed {url}: {e}")
     return None
 
 
-def fetch_from_html():
+def fetch_from_ajax():
+    """نرخ فعلی (last trade)."""
+    return fetch_ajax_value(("p",))
+
+
+def fetch_low_from_ajax():
+    """پایین‌ترین قیمت روز."""
+    return fetch_ajax_value(("l", "low", "min"))
+
+
+def fetch_html_value(patterns):
     try:
         r = requests.get(PRICE_URL, headers=HEADERS, timeout=30)
         r.raise_for_status()
         html = r.text
-        patterns = [
-            r'data-col="info\.last_trade\.PDP"[^>]*>\s*([\d,۰-۹]+)',
-            r'data-col="info\.last_trade\.PDP"[^>]*>.*?<span[^>]*>\s*([\d,۰-۹]+)',
-            r'class="value"[^>]*>\s*<span[^>]*>\s*([\d,۰-۹]+)',
-            r'"price_gbp".{0,200}?"p"\s*:\s*"([\d,]+)"',
-        ]
         for p in patterns:
             m = re.search(p, html, re.S)
             if m:
@@ -137,10 +151,34 @@ def fetch_from_html():
     return None
 
 
+def fetch_from_html():
+    """نرخ فعلی (last trade) از صفحه‌ی html."""
+    return fetch_html_value([
+        r'data-col="info\.last_trade\.PDP"[^>]*>\s*([\d,۰-۹]+)',
+        r'data-col="info\.last_trade\.PDP"[^>]*>.*?<span[^>]*>\s*([\d,۰-۹]+)',
+        r'class="value"[^>]*>\s*<span[^>]*>\s*([\d,۰-۹]+)',
+        r'"price_gbp".{0,200}?"p"\s*:\s*"([\d,]+)"',
+    ])
+
+
+def fetch_low_from_html():
+    """پایین‌ترین قیمت روز از صفحه‌ی html (پشتیبان اگر ajax نداشت)."""
+    return fetch_html_value([
+        r'data-col="info\.last_trade\.PDL"[^>]*>\s*([\d,۰-۹]+)',
+        r'data-col="info\.last_trade\.PDL"[^>]*>.*?<span[^>]*>\s*([\d,۰-۹]+)',
+        r'پایین\s*ترین\s*قیمت\s*روز[\s\S]{0,300}?([\d,۰-۹]{6,})',
+        r'"price_gbp".{0,200}?"l"\s*:\s*"([\d,]+)"',
+    ])
+
+
 def get_price_rial() -> int:
     if MANUAL_PRICE_RIAL:
         return _to_int(MANUAL_PRICE_RIAL)
-    v = fetch_from_ajax() or fetch_from_html()
+    v = fetch_low_from_ajax() or fetch_low_from_html()
+    if v is None:
+        # اگر پایین‌ترین قیمت روز پیدا نشد، به نرخ فعلی برمی‌گردیم و به ادمین خبر می‌دهیم
+        notify_admin("⚠️ پایین‌ترین قیمت روز از tgju پیدا نشد؛ به‌جایش نرخ فعلی استفاده شد.")
+        v = fetch_from_ajax() or fetch_from_html()
     if v is None:
         raise RuntimeError("قیمت پوند از tgju خوانده نشد.")
     return v
@@ -289,6 +327,14 @@ def notify_admin(text: str):
             print("admin notify failed:", e)
 
 
+def seconds_until(hour: int, minute: int, now: datetime) -> int:
+    """چند ثانیه تا ساعت:دقیقه‌ی مشخص‌شده (همون روز، همون تایم‌زون now) مانده است."""
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        return 0
+    return int((target - now).total_seconds())
+
+
 # -------------------------------------------------------------------- main
 def main() -> int:
     now = datetime.now(TZ)
@@ -302,33 +348,37 @@ def main() -> int:
         return 1
 
     try:
-        if MODE == "image":
-            if now.weekday() == 6:  # یکشنبه - صرافی تعطیل، عکسی ارسال نمی‌شود
-                print("Sunday - skipping image.")
-                return 0
-            if not generate_image.PERSIAN_FONT_FOUND:
-                notify_admin("⚠️ فونت فارسی (Vazirmatn) پیدا نشد؛ تاریخ فارسی روی عکس درست نمایش داده نمی‌شود.")
-            price = get_price_rial()
-            p = compute_prices(price)
-            print(f"site={price} rounded={p['rounded_rial']} base_toman={p['base_toman']}")
-            jy, jm, jd = gregorian_to_jalali(now.year, now.month, now.day)
-            out_path = generate_image.build_image(now, jy, jm, jd, p, "/tmp/rate.png")
-            tg_send_photo(CHANNEL, out_path)
-            print("image sent.")
-            return 0
-
-        if now.weekday() == 6:  # یکشنبه
+        if now.weekday() == 6:  # یکشنبه: فقط پیام تعطیلی، نه قیمت و نه عکس
             tg_send(CHANNEL, build_closed_message(now))
             print("closed-day message sent.")
             return 0
 
+        # قیمت فقط یک‌بار خوانده و محاسبه می‌شود تا پیام متنی (۱۰:۰۰) و عکس (۱۰:۳۰)
+        # دقیقاً همین یک قیمت را نشان بدهند، نه دو قیمتِ جدا از دو بار خواندن سایت.
         price = get_price_rial()
         p = compute_prices(price)
-        print(f"site={price} rounded={p['rounded_rial']} base_toman={p['base_toman']}")
-        tb, ts = tether_rates()
-        print(f"tether buy={tb} sell={ts}")
-        tg_send(CHANNEL, build_price_message(now, p, tb, ts))
-        print("price message sent.")
+        print(f"site_low={price} rounded={p['rounded_rial']} base_toman={p['base_toman']}")
+
+        if MODE in ("text", "both"):
+            tb, ts = tether_rates()
+            print(f"tether buy={tb} sell={ts}")
+            tg_send(CHANNEL, build_price_message(now, p, tb, ts))
+            print("price message sent.")
+
+        if MODE in ("image", "both"):
+            if MODE == "both":
+                wait_s = seconds_until(IMAGE_HOUR, IMAGE_MINUTE, now)
+                if wait_s > 0:
+                    print(f"waiting {wait_s}s until {IMAGE_HOUR:02d}:{IMAGE_MINUTE:02d} London "
+                          f"to send the image with the same price...")
+                    time.sleep(wait_s)
+            if not generate_image.PERSIAN_FONT_FOUND:
+                notify_admin("⚠️ فونت فارسی (Vazirmatn) پیدا نشد؛ تاریخ فارسی روی عکس درست نمایش داده نمی‌شود.")
+            jy, jm, jd = gregorian_to_jalali(now.year, now.month, now.day)
+            out_path = generate_image.build_image(now, jy, jm, jd, p, "/tmp/rate.png")
+            tg_send_photo(CHANNEL, out_path)
+            print("image sent.")
+
         return 0
     except Exception as e:  # noqa: BLE001
         print("ERROR:", e)

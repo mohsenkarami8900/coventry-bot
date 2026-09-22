@@ -45,7 +45,54 @@ jobs:
               "30 9 * * *"|"30 10 * * *") echo "mode=image" >> "$GITHUB_OUTPUT" ;;
               *) echo "mode=text" >> "$GITHUB_OUTPUT" ;;
             esac
-          fi
+          finame: Daily GBP price
+
+on:
+  schedule:
+    # لندن در تابستان UTC+1 و در زمستان UTC+0 است؛ هر دو زمان اجرا می‌شود
+    # و bot.py فقط وقتی ساعت لندن 10 است کاری می‌کند.
+    # یک اجرا: قیمت یک‌بار خوانده می‌شود، پیام متنی فوراً می‌رود، ربات تا 10:30
+    # صبر می‌کند و بعد عکس را با همان قیمت می‌فرستد (تا هیچ‌وقت قیمتِ پیام و عکس فرق نکند).
+    - cron: "0 9 * * *"    # 10:00 لندن (تابستان)
+    - cron: "0 10 * * *"   # 10:00 لندن (زمستان)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "both (پیام+عکس، همون قیمت) / text (فقط پیام) / image (فقط عکس)"
+        default: "both"
+      dry_run:
+        description: "فقط تست (ارسال نکن)"
+        default: "1"
+      force_run:
+        description: "نادیده گرفتن ساعت 10 (1 = بله)"
+        default: "1"
+      manual_price_rial:
+        description: "قیمت دستی به ریال (اختیاری)"
+        default: ""
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Persian font
+        run: sudo apt-get update && sudo apt-get install -y fonts-vazirmatn
+      - run: pip install -r requirements.txt
+      - name: Run bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+          CHANNEL: "@Coventryexchange"
+          MODE: ${{ github.event.inputs.mode || 'both' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          FORCE_RUN: ${{ github.event.inputs.force_run }}
+          MANUAL_PRICE_RIAL: ${{ github.event.inputs.manual_price_rial }}
+        run: python bot.py
+
       - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}

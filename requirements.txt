@@ -1,2 +1,3 @@
 requests>=2.31
 tzdata
+Pillow>=10.0

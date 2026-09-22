@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """ربات کانال Coventryexchange - ارسال روزانه قیمت پوند.
 
-هر روز ساعت 10:00 به وقت لندن اجرا می‌شود:
-  - دوشنبه تا شنبه: قیمت پوند را از tgju می‌خواند و پیام ثابت را با قیمت‌ها می‌فرستد
-  - یکشنبه: پیام تعطیلی (+ نکته کوتاه)
+دو حالت اجرا (با متغیر محیطی MODE مشخص می‌شود):
+  - MODE=text  (ساعت 10:00 لندن): پیام متنی با قیمت‌ها و نرخ تتر
+      دوشنبه تا شنبه: پیام قیمت | یکشنبه: پیام تعطیلی (+ نکته کوتاه)
+  - MODE=image (ساعت 10:30 لندن): عکس نرخ روزانه (از روی قالب assets/template.png)
+      یکشنبه‌ها عکسی ارسال نمی‌شود (صرافی تعطیل است)
 """
 import os
 import re
@@ -13,6 +15,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+import generate_image
+
 # ----------------------------------------------------------------- تنظیمات
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHANNEL = os.environ.get("CHANNEL", "@Coventryexchange")
@@ -20,6 +24,7 @@ ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")  # اختیاری: خطاه�
 MANUAL_PRICE_RIAL = os.environ.get("MANUAL_PRICE_RIAL", "").strip()  # اختیاری: قیمت دستی به ریال
 FORCE_RUN = os.environ.get("FORCE_RUN", "") == "1"  # نادیده گرفتن چک ساعت 10
 DRY_RUN = os.environ.get("DRY_RUN", "") == "1"  # فقط چاپ کن، ارسال نکن
+MODE = os.environ.get("MODE", "text").strip().lower()  # text یا image
 
 SEND_HOUR = 10
 TZ = ZoneInfo("Europe/London")
@@ -40,7 +45,7 @@ FX_URLS = [
     ("https://open.er-api.com/v6/latest/USD", lambda d: d["rates"]["GBP"]),
     ("https://api.frankfurter.app/latest?from=USD&to=GBP", lambda d: d["rates"]["GBP"]),
 ]
-PHONE = "+447918427402"
+PHONE = "+447769597420"
 
 PRICE_URL = "https://www.tgju.org/profile/price_gbp"
 AJAX_URLS = [
@@ -261,6 +266,21 @@ def tg_send(chat_id: str, text: str):
         raise RuntimeError(f"Telegram error {r.status_code}: {r.text}")
 
 
+def tg_send_photo(chat_id: str, photo_path: str):
+    if DRY_RUN:
+        print(f"----- DRY RUN (photo) -> {chat_id} -----\n{photo_path}")
+        return
+    with open(photo_path, "rb") as f:
+        r = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+            data={"chat_id": chat_id},
+            files={"photo": ("rate.png", f, "image/png")},
+            timeout=60,
+        )
+    if not r.ok:
+        raise RuntimeError(f"Telegram error {r.status_code}: {r.text}")
+
+
 def notify_admin(text: str):
     if ADMIN_CHAT_ID and BOT_TOKEN and not DRY_RUN:
         try:
@@ -282,6 +302,21 @@ def main() -> int:
         return 1
 
     try:
+        if MODE == "image":
+            if now.weekday() == 6:  # یکشنبه - صرافی تعطیل، عکسی ارسال نمی‌شود
+                print("Sunday - skipping image.")
+                return 0
+            if not generate_image.PERSIAN_FONT_FOUND:
+                notify_admin("⚠️ فونت فارسی (Vazirmatn) پیدا نشد؛ تاریخ فارسی روی عکس درست نمایش داده نمی‌شود.")
+            price = get_price_rial()
+            p = compute_prices(price)
+            print(f"site={price} rounded={p['rounded_rial']} base_toman={p['base_toman']}")
+            jy, jm, jd = gregorian_to_jalali(now.year, now.month, now.day)
+            out_path = generate_image.build_image(now, jy, jm, jd, p, "/tmp/rate.png")
+            tg_send_photo(CHANNEL, out_path)
+            print("image sent.")
+            return 0
+
         if now.weekday() == 6:  # یکشنبه
             tg_send(CHANNEL, build_closed_message(now))
             print("closed-day message sent.")
@@ -297,7 +332,7 @@ def main() -> int:
         return 0
     except Exception as e:  # noqa: BLE001
         print("ERROR:", e)
-        notify_admin(f"⚠️ ربات قیمت پوند خطا داد:\n{e}")
+        notify_admin(f"⚠️ ربات قیمت پوند خطا داد ({MODE}):\n{e}")
         return 1
 
 

@@ -2,10 +2,17 @@ name: Daily GBP price
 
 on:
   schedule:
-    - cron: "0 9 * * *"
-    - cron: "0 10 * * *"
+    # لندن در تابستان UTC+1 و در زمستان UTC+0 است؛ هر دو زمان اجرا می‌شود
+    # و bot.py فقط وقتی ساعت لندن 10 است کاری می‌کند.
+    - cron: "0 9 * * *"    # پیام متنی - ساعت 10:00 لندن (تابستان)
+    - cron: "0 10 * * *"   # پیام متنی - ساعت 10:00 لندن (زمستان)
+    - cron: "30 9 * * *"   # عکس نرخ روزانه - ساعت 10:30 لندن (تابستان)
+    - cron: "30 10 * * *"  # عکس نرخ روزانه - ساعت 10:30 لندن (زمستان)
   workflow_dispatch:
     inputs:
+      mode:
+        description: "text یا image"
+        default: "text"
       dry_run:
         description: "فقط تست (ارسال نکن)"
         default: "1"
@@ -24,12 +31,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install Persian font
+        run: sudo apt-get update && sudo apt-get install -y fonts-vazirmatn
       - run: pip install -r requirements.txt
+      - name: Determine mode (text/image)
+        id: mode
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+          else
+            case "${{ github.event.schedule }}" in
+              "30 9 * * *"|"30 10 * * *") echo "mode=image" >> "$GITHUB_OUTPUT" ;;
+              *) echo "mode=text" >> "$GITHUB_OUTPUT" ;;
+            esac
+          fi
       - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
           CHANNEL: "@Coventryexchange"
+          MODE: ${{ steps.mode.outputs.mode }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           FORCE_RUN: ${{ github.event.inputs.force_run }}
           MANUAL_PRICE_RIAL: ${{ github.event.inputs.manual_price_rial }}

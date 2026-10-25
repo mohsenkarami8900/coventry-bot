@@ -2,12 +2,19 @@ name: Daily GBP price
 
 on:
   schedule:
-    # لندن در تابستان UTC+1 و در زمستان UTC+0 است؛ هر دو زمان اجرا می‌شود
+    # لندن در تابستان UTC+1 و در زمستان UTC+0 است؛ هر ۴ زمان اجرا می‌شود
     # و bot.py فقط وقتی ساعت لندن 10 است کاری می‌کند.
-    # یک اجرا: قیمت یک‌بار خوانده می‌شود، پیام متنی فوراً می‌رود، ربات تا 10:30
-    # صبر می‌کند و بعد عکس را با همان قیمت می‌فرستد (تا هیچ‌وقت قیمتِ پیام و عکس فرق نکند).
-    - cron: "0 9 * * *"    # 10:00 لندن (تابستان)
-    - cron: "0 10 * * *"   # 10:00 لندن (زمستان)
+    #
+    # ساعت‌ها عمداً دقیقاً سرِ ساعت نیستند (مثلاً 07 به‌جای 00)، چون خودِ گیت‌هاب
+    # می‌گه دقیقاً سرِ ساعت بیشترین احتمال تأخیر/حذف‌شدن زمان‌بندی رو داره.
+    #
+    # هر روز دو تا فرصت داریم (اصلی + پشتیبان نیم‌ساعت بعد)؛ اگه اولی به هر دلیلی
+    # اجرا نشد، دومی جاشو پر می‌کنه. و چون bot.py وضعیت ارسال هر روز رو توی
+    # last_run.json نگه می‌داره، اگه هر دو اجرا بشن پیام/عکس تکراری فرستاده نمی‌شه.
+    - cron: "7 9 * * *"    # اصلی - 10:07 لندن (تابستان)
+    - cron: "37 9 * * *"   # پشتیبان - 10:37 لندن (تابستان)
+    - cron: "7 10 * * *"   # اصلی - 10:07 لندن (زمستان)
+    - cron: "37 10 * * *"  # پشتیبان - 10:37 لندن (زمستان)
   workflow_dispatch:
     inputs:
       mode:
@@ -17,11 +24,14 @@ on:
         description: "فقط تست (ارسال نکن)"
         default: "1"
       force_run:
-        description: "نادیده گرفتن ساعت 10 (1 = بله)"
+        description: "نادیده گرفتن ساعت 10 و وضعیت ارسال‌شده (1 = بله)"
         default: "1"
       manual_price_rial:
         description: "قیمت دستی به ریال (اختیاری)"
         default: ""
+
+permissions:
+  contents: write   # لازم است تا last_run.json بعد از ارسال واقعی کامیت شود
 
 jobs:
   post:
@@ -45,3 +55,15 @@ jobs:
           FORCE_RUN: ${{ github.event.inputs.force_run }}
           MANUAL_PRICE_RIAL: ${{ github.event.inputs.manual_price_rial }}
         run: python bot.py
+      - name: Save last-run state
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain last_run.json 2>/dev/null)" ]; then
+            git config user.name "coventry-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add last_run.json
+            git commit -m "update last_run state"
+            git push
+          else
+            echo "no state change to commit"
+          fi

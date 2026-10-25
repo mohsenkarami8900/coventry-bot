@@ -10,6 +10,7 @@
   - MODE=image : فقط عکس، با قیمتِ لحظه‌ی اجرا (برای تست دستی)
   یکشنبه‌ها (در هر MODE): فقط پیام تعطیلی فرستاده می‌شود، نه قیمت و نه عکس.
 """
+import json
 import os
 import re
 import sys
@@ -20,6 +21,8 @@ from zoneinfo import ZoneInfo
 import requests
 
 import generate_image
+
+STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_run.json")
 
 # ----------------------------------------------------------------- تنظیمات
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
@@ -335,6 +338,30 @@ def seconds_until(hour: int, minute: int, now: datetime) -> int:
     return int((target - now).total_seconds())
 
 
+# -------------------------------------------------------------- وضعیت روزانه
+# این فایل (last_run.json) توی خودِ ریپو نگه‌داری و بعد از هر ارسالِ واقعی توسط
+# ورک‌فلو کامیت می‌شود. دو تا فایده دارد: (۱) اگر به‌خاطر کرون پشتیبان یا اجرای
+# دستی، دوباره اجرا شدیم، پیام/عکسِ تکراری نمی‌فرستیم. (۲) هر وقت بخوایم ببینیم
+# آخرین ارسال موفق کِی بوده، کافیه همین فایل رو توی گیت‌هاب باز کنیم.
+def load_state(today_key: str) -> dict:
+    try:
+        with open(STATE_PATH, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        if state.get("date") == today_key:
+            return state
+    except Exception:  # noqa: BLE001
+        pass
+    return {"date": today_key}
+
+
+def save_state(state: dict):
+    try:
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as e:  # noqa: BLE001
+        print("state save failed:", e)
+
+
 # -------------------------------------------------------------------- main
 def main() -> int:
     now = datetime.now(TZ)
@@ -347,37 +374,63 @@ def main() -> int:
         print("BOT_TOKEN تنظیم نشده است.")
         return 1
 
+    today_key = now.strftime("%Y-%m-%d")
+    state = load_state(today_key)
+
+    def mark_sent(key):
+        if not DRY_RUN:
+            state[key] = True
+            save_state(state)
+
     try:
         if now.weekday() == 6:  # یکشنبه: فقط پیام تعطیلی، نه قیمت و نه عکس
+            if not FORCE_RUN and state.get("closed_sent"):
+                print("closed message already sent today - skipping (duplicate run).")
+                return 0
             tg_send(CHANNEL, build_closed_message(now))
             print("closed-day message sent.")
+            mark_sent("closed_sent")
             return 0
 
         # قیمت فقط یک‌بار خوانده و محاسبه می‌شود تا پیام متنی (۱۰:۰۰) و عکس (۱۰:۳۰)
         # دقیقاً همین یک قیمت را نشان بدهند، نه دو قیمتِ جدا از دو بار خواندن سایت.
+        need_text = MODE in ("text", "both") and (FORCE_RUN or not state.get("text_sent"))
+        need_image = MODE in ("image", "both") and (FORCE_RUN or not state.get("image_sent"))
+        if not need_text and not need_image:
+            print("already sent today (text & image) - skipping (duplicate run, probably the backup cron).")
+            return 0
+
         price = get_price_rial()
         p = compute_prices(price)
         print(f"site_low={price} rounded={p['rounded_rial']} base_toman={p['base_toman']}")
 
         if MODE in ("text", "both"):
-            tb, ts = tether_rates()
-            print(f"tether buy={tb} sell={ts}")
-            tg_send(CHANNEL, build_price_message(now, p, tb, ts))
-            print("price message sent.")
+            if not need_text:
+                print("text already sent today - skipping.")
+            else:
+                tb, ts = tether_rates()
+                print(f"tether buy={tb} sell={ts}")
+                tg_send(CHANNEL, build_price_message(now, p, tb, ts))
+                print("price message sent.")
+                mark_sent("text_sent")
 
         if MODE in ("image", "both"):
-            if MODE == "both":
-                wait_s = seconds_until(IMAGE_HOUR, IMAGE_MINUTE, now)
-                if wait_s > 0:
-                    print(f"waiting {wait_s}s until {IMAGE_HOUR:02d}:{IMAGE_MINUTE:02d} London "
-                          f"to send the image with the same price...")
-                    time.sleep(wait_s)
-            if not generate_image.PERSIAN_FONT_FOUND:
-                notify_admin("⚠️ فونت فارسی (Vazirmatn) پیدا نشد؛ تاریخ فارسی روی عکس درست نمایش داده نمی‌شود.")
-            jy, jm, jd = gregorian_to_jalali(now.year, now.month, now.day)
-            out_path = generate_image.build_image(now, jy, jm, jd, p, "/tmp/rate.png")
-            tg_send_photo(CHANNEL, out_path)
-            print("image sent.")
+            if not need_image:
+                print("image already sent today - skipping.")
+            else:
+                if MODE == "both":
+                    wait_s = seconds_until(IMAGE_HOUR, IMAGE_MINUTE, now)
+                    if wait_s > 0:
+                        print(f"waiting {wait_s}s until {IMAGE_HOUR:02d}:{IMAGE_MINUTE:02d} London "
+                              f"to send the image with the same price...")
+                        time.sleep(wait_s)
+                if not generate_image.PERSIAN_FONT_FOUND:
+                    notify_admin("⚠️ فونت فارسی (Vazirmatn) پیدا نشد؛ تاریخ فارسی روی عکس درست نمایش داده نمی‌شود.")
+                jy, jm, jd = gregorian_to_jalali(now.year, now.month, now.day)
+                out_path = generate_image.build_image(now, jy, jm, jd, p, "/tmp/rate.png")
+                tg_send_photo(CHANNEL, out_path)
+                print("image sent.")
+                mark_sent("image_sent")
 
         return 0
     except Exception as e:  # noqa: BLE001

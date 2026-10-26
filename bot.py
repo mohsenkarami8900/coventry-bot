@@ -36,9 +36,12 @@ MODE = (os.environ.get("MODE", "").strip().lower() or "both")  # both / text / i
 SEND_HOUR = 10          # ساعت هدف برای ارسال (برای پیام‌های لاگ و منطق عکس)
 EARLIEST_HOUR = 9       # قبل از این ساعت چیزی نفرست (برای جلوگیری از اجرای خیلی زودهنگام)
 LATEST_HOUR = 22        # بعد از این ساعت هم چیزی نفرست (برای جلوگیری از ارسال خیلی دیرهنگام/بی‌معنی)
+ALERT_HOUR = 12         # اگه تا این ساعت چیزی نرفته بود، به ادمین هشدار بده که دستی اجرا کنه
 IMAGE_HOUR = 10
 IMAGE_MINUTE = 30
 TZ = ZoneInfo("Europe/London")
+
+WORKFLOW_DISPATCH_URL = "https://github.com/mohsenkarami8900/coventry-bot/actions/workflows/daily.yml"
 
 ROUND_STEP_RIAL = 10_000          # رند به پایین تا نزدیک‌ترین 10,000 ریال
 # کسر از قیمت سایت (به تومان)
@@ -442,6 +445,24 @@ def main() -> int:
         print("ERROR:", e)
         notify_admin(f"⚠️ ربات قیمت پوند خطا داد ({MODE}):\n{e}")
         return 1
+    finally:
+        # هر اجرا (موفق، ناموفق، یا رد شده) بعدش این چک رو می‌کنه: اگه از ساعت ALERT_HOUR
+        # گذشته و هنوز امروز هیچی (نه پیام تعطیلی، نه پیام قیمت) نرفته، یه بار (نه هر دفعه)
+        # به ادمین با لینک مستقیم اجرای دستی خبر می‌ده. این برای وقتیه که گیت‌هاب اصلاً
+        # هیچ‌کدوم از زمان‌بندی‌ها رو اجرا نکرده باشه (نه فقط دیر اجرا کرده باشه).
+        try:
+            if not DRY_RUN and now.hour >= ALERT_HOUR and not state.get("alert_sent"):
+                pending = (not state.get("closed_sent")) if now.weekday() == 6 else (not state.get("text_sent"))
+                if pending:
+                    notify_admin(
+                        f"⚠️ تا ساعت {now:%H:%M} لندن هنوز پیام امروز توی کانال فرستاده نشده "
+                        f"(احتمالاً گیت‌هاب امروز زمان‌بندی رو اجرا نکرده).\n\n"
+                        f"برای ارسال دستی روی لینک زیر بزن و بعد «Run workflow» رو بزن:\n"
+                        f"{WORKFLOW_DISPATCH_URL}"
+                    )
+                    mark_sent("alert_sent")
+        except Exception as e2:  # noqa: BLE001
+            print("alert check failed:", e2)
 
 
 if __name__ == "__main__":

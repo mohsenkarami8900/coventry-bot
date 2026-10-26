@@ -33,7 +33,9 @@ FORCE_RUN = os.environ.get("FORCE_RUN", "") == "1"  # نادیده گرفتن چ
 DRY_RUN = os.environ.get("DRY_RUN", "") == "1"  # فقط چاپ کن، ارسال نکن
 MODE = (os.environ.get("MODE", "").strip().lower() or "both")  # both / text / image
 
-SEND_HOUR = 10
+SEND_HOUR = 10          # ساعت هدف برای ارسال (برای پیام‌های لاگ و منطق عکس)
+EARLIEST_HOUR = 9       # قبل از این ساعت چیزی نفرست (برای جلوگیری از اجرای خیلی زودهنگام)
+LATEST_HOUR = 22        # بعد از این ساعت هم چیزی نفرست (برای جلوگیری از ارسال خیلی دیرهنگام/بی‌معنی)
 IMAGE_HOUR = 10
 IMAGE_MINUTE = 30
 TZ = ZoneInfo("Europe/London")
@@ -365,9 +367,12 @@ def save_state(state: dict):
 # -------------------------------------------------------------------- main
 def main() -> int:
     now = datetime.now(TZ)
-    # GitHub cron به UTC است؛ دو زمان‌بندی داریم و فقط وقتی لندن ساعت 10 است ادامه می‌دهیم
-    if not FORCE_RUN and now.hour != SEND_HOUR:
-        print(f"London time is {now:%H:%M}, not {SEND_HOUR}:00 - skipping.")
+    # GitHub گاهی اجرای زمان‌بندی‌شده (schedule) رو با چند ساعت تأخیر اجرا می‌کنه (دیده شده تا ۷ ساعت!).
+    # قبلاً اینجا چک می‌کردیم که ساعت لندن دقیقاً ۱۰ باشه، ولی این باعث می‌شد اگه گیت‌هاب دیر اجرا کنه
+    # (مثلاً ساعت ۱۶)، ربات کلاً از ارسال صرف‌نظر کنه و اون روز هیچی نره. حالا به‌جاش فقط یه بازه‌ی
+    # معقول چک می‌کنیم (نه خیلی زود، نه خیلی دیر) و تکراری‌نبودن ارسال رو last_run.json تضمین می‌کنه.
+    if not FORCE_RUN and not (EARLIEST_HOUR <= now.hour < LATEST_HOUR):
+        print(f"London time is {now:%H:%M}, outside the {EARLIEST_HOUR}:00-{LATEST_HOUR}:00 window - skipping.")
         return 0
 
     if not DRY_RUN and not BOT_TOKEN:

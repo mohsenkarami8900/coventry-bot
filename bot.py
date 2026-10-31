@@ -2,10 +2,9 @@
 """ربات کانال Coventryexchange - ارسال روزانه قیمت پوند.
 
 با متغیر محیطی MODE مشخص می‌شود (پیش‌فرض: both):
-  - MODE=both  (اجرای روزانه‌ی واقعی، ساعت 10:00 لندن): قیمت را یک‌بار می‌خواند،
-      فوراً پیام متنی را می‌فرستد، تا ساعت 10:30 صبر می‌کند و بعد عکس را
-      با همان قیمتِ محاسبه‌شده (نه یک قیمتِ تازه) می‌فرستد. این‌طوری پیام متنی
-      و عکس همیشه یک قیمت دارند.
+  - MODE=both  : قیمت را یک‌بار می‌خواند و بلافاصله هم پیام متنی و هم عکس را
+      با همون قیمتِ محاسبه‌شده (نه دو قیمتِ جدا) پشت‌سرهم می‌فرستد؛ دیگه
+      منتظر هیچ ساعت خاصی برای عکس نمی‌مونه.
   - MODE=text  : فقط پیام متنی (برای تست دستی)
   - MODE=image : فقط عکس، با قیمتِ لحظه‌ی اجرا (برای تست دستی)
   یکشنبه‌ها (در هر MODE): فقط پیام تعطیلی فرستاده می‌شود، نه قیمت و نه عکس.
@@ -14,7 +13,6 @@ import json
 import os
 import re
 import sys
-import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -36,12 +34,17 @@ MODE = (os.environ.get("MODE", "").strip().lower() or "both")  # both / text / i
 SEND_HOUR = 10          # ساعت هدف برای ارسال (برای پیام‌های لاگ و منطق عکس)
 EARLIEST_HOUR = 9       # قبل از این ساعت چیزی نفرست (برای جلوگیری از اجرای خیلی زودهنگام)
 LATEST_HOUR = 22        # بعد از این ساعت هم چیزی نفرست (برای جلوگیری از ارسال خیلی دیرهنگام/بی‌معنی)
-ALERT_HOUR = 12         # اگه تا این ساعت چیزی نرفته بود، به ادمین هشدار بده که دستی اجرا کنه
-IMAGE_HOUR = 10
-IMAGE_MINUTE = 30
+ALERT_HOUR = 10         # اگه تا این ساعت:دقیقه چیزی نرفته بود، به ادمین هشدار بده که دستی اجرا کنه (پشتیبان؛
+ALERT_MINUTE = 35       # پشتیبانِ داخلیه، فقط وقتی کار می‌کنه که گیت‌هاب اصلاً اجرا بشه - بک‌آپ اصلی، healthchecks.io خارجیه، پایین‌تر)
 TZ = ZoneInfo("Europe/London")
 
 WORKFLOW_DISPATCH_URL = "https://github.com/mohsenkarami8900/coventry-bot/actions/workflows/daily.yml"
+
+# healthchecks.io (یا مشابهش) - یه سرویسِ رایگانِ کاملاً جدا از گیت‌هاب که اگه هر روز تا یه
+# ساعتِ مشخص ازش «پینگ موفقیت» نگیره، خودش (نه از طریق بات/گیت‌هاب) به تلگرام شما خبر می‌ده.
+# این دقیقاً همون چیزیه که اگه گیت‌هاب امروز هیچ اجرایی نداشته باشه هم کار می‌کنه، چون ارسال‌کننده‌ی
+# هشدار، سرور خودِ healthchecks.io هست، نه کدی که توی گیت‌هاب اکشن اجرا می‌شه.
+HC_PING_URL = os.environ.get("HC_PING_URL", "").strip()
 
 ROUND_STEP_RIAL = 10_000          # رند به پایین تا نزدیک‌ترین 10,000 ریال
 # کسر از قیمت سایت (به تومان)
@@ -335,12 +338,15 @@ def notify_admin(text: str):
             print("admin notify failed:", e)
 
 
-def seconds_until(hour: int, minute: int, now: datetime) -> int:
-    """چند ثانیه تا ساعت:دقیقه‌ی مشخص‌شده (همون روز، همون تایم‌زون now) مانده است."""
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now:
-        return 0
-    return int((target - now).total_seconds())
+def ping_healthcheck():
+    """به healthchecks.io خبر می‌ده که امروز با موفقیت ارسال شد. این سرویس کاملاً خارج از
+    گیت‌هابه: اگه این پینگ هر روز تا ساعتِ مشخص‌شده (توی تنظیمات خودِ healthchecks.io) نرسه،
+    خودش مستقیم به تلگرام شما پیام می‌ده - حتی اگه گیت‌هاب اکشن امروز اصلاً اجرا نشده باشه."""
+    if HC_PING_URL and not DRY_RUN:
+        try:
+            requests.get(HC_PING_URL, timeout=10)
+        except Exception as e:  # noqa: BLE001
+            print("healthcheck ping failed:", e)
 
 
 # -------------------------------------------------------------- وضعیت روزانه
@@ -426,12 +432,6 @@ def main() -> int:
             if not need_image:
                 print("image already sent today - skipping.")
             else:
-                if MODE == "both":
-                    wait_s = seconds_until(IMAGE_HOUR, IMAGE_MINUTE, now)
-                    if wait_s > 0:
-                        print(f"waiting {wait_s}s until {IMAGE_HOUR:02d}:{IMAGE_MINUTE:02d} London "
-                              f"to send the image with the same price...")
-                        time.sleep(wait_s)
                 if not generate_image.PERSIAN_FONT_FOUND:
                     notify_admin("⚠️ فونت فارسی (Vazirmatn) پیدا نشد؛ تاریخ فارسی روی عکس درست نمایش داده نمی‌شود.")
                 jy, jm, jd = gregorian_to_jalali(now.year, now.month, now.day)
@@ -446,17 +446,26 @@ def main() -> int:
         notify_admin(f"⚠️ ربات قیمت پوند خطا داد ({MODE}):\n{e}")
         return 1
     finally:
-        # هر اجرا (موفق، ناموفق، یا رد شده) بعدش این چک رو می‌کنه: اگه از ساعت ALERT_HOUR
-        # گذشته و هنوز امروز هیچی (نه پیام تعطیلی، نه پیام قیمت) نرفته، یه بار (نه هر دفعه)
-        # به ادمین با لینک مستقیم اجرای دستی خبر می‌ده. این برای وقتیه که گیت‌هاب اصلاً
-        # هیچ‌کدوم از زمان‌بندی‌ها رو اجرا نکرده باشه (نه فقط دیر اجرا کرده باشه).
+        # اگه امروز موفق (پیام تعطیلی یا پیام قیمت) ارسال شده، به healthchecks.io خبر می‌دیم.
+        # این سیگنال اصلیه برای "هشدار اگه نرفت" - کاملاً خارج از گیت‌هاب کار می‌کنه (بالا توضیح داده شد).
         try:
-            if not DRY_RUN and now.hour >= ALERT_HOUR and not state.get("alert_sent"):
+            success_today = state.get("closed_sent") if now.weekday() == 6 else state.get("text_sent")
+            if success_today:
+                ping_healthcheck()
+        except Exception as e3:  # noqa: BLE001
+            print("healthcheck ping-check failed:", e3)
+
+        # هشدارِ پشتیبانِ داخلی (اضافه بر healthchecks.io): اگه از ساعت ALERT_HOUR:ALERT_MINUTE
+        # گذشته و هنوز امروز هیچی نرفته، یه بار (نه هر دفعه) به ادمین با لینک مستقیم اجرای دستی
+        # خبر می‌ده. توجه: این فقط وقتی کار می‌کنه که گیت‌هاب اکشن واقعاً همین اجرا رو انجام بده؛
+        # اگه گیت‌هاب امروز هیچ اجرایی نداشته باشه، این بخش هم اصلاً فرصت اجرا پیدا نمی‌کنه - برای
+        # همون حالت، healthchecks.io (بالا) تنها چیزیه که قابل‌اعتماده.
+        try:
+            if not DRY_RUN and (now.hour, now.minute) >= (ALERT_HOUR, ALERT_MINUTE) and not state.get("alert_sent"):
                 pending = (not state.get("closed_sent")) if now.weekday() == 6 else (not state.get("text_sent"))
                 if pending:
                     notify_admin(
-                        f"⚠️ تا ساعت {now:%H:%M} لندن هنوز پیام امروز توی کانال فرستاده نشده "
-                        f"(احتمالاً گیت‌هاب امروز زمان‌بندی رو اجرا نکرده).\n\n"
+                        f"⚠️ تا ساعت {now:%H:%M} لندن هنوز پیام امروز توی کانال فرستاده نشده.\n\n"
                         f"برای ارسال دستی روی لینک زیر بزن و بعد «Run workflow» رو بزن:\n"
                         f"{WORKFLOW_DISPATCH_URL}"
                     )

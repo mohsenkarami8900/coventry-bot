@@ -33,10 +33,20 @@ MODE = (os.environ.get("MODE", "").strip().lower() or "both")  # both / text / i
 
 SEND_HOUR = 10          # ساعت هدف برای ارسال (برای پیام‌های لاگ و منطق عکس)
 EARLIEST_HOUR = 9       # قبل از این ساعت چیزی نفرست (برای جلوگیری از اجرای خیلی زودهنگام)
-LATEST_HOUR = 22        # بعد از این ساعت هم چیزی نفرست (برای جلوگیری از ارسال خیلی دیرهنگام/بی‌معنی)
+LATEST_HOUR = 11        # بعد از این ساعت دیگه خودکار نفرست - اگه گیت‌هاب دیر اجرا کرد (مثلاً ساعت ۱۴ یا ۲)
+                        # دیگه پیامِ بی‌فایده نره؛ به‌جاش کاربر خودش دستی اجرا می‌کنه (لینک پایین پیام هشدار).
+                        # این چک فقط برای اجرای خودکار (schedule) اعماله - اجرای دستی (workflow_dispatch:
+                        # چه با کلیک خودِ کاربر، چه با سرویس خارجیِ cron-job.org) همیشه کار می‌کنه (پایین‌تر).
 ALERT_HOUR = 10         # اگه تا این ساعت:دقیقه چیزی نرفته بود، به ادمین هشدار بده که دستی اجرا کنه (پشتیبان؛
 ALERT_MINUTE = 35       # پشتیبانِ داخلیه، فقط وقتی کار می‌کنه که گیت‌هاب اصلاً اجرا بشه - بک‌آپ اصلی، healthchecks.io خارجیه، پایین‌تر)
 TZ = ZoneInfo("Europe/London")
+
+# نوع رویدادی که این اجرا رو شروع کرده: "schedule" (کرون خودِ گیت‌هاب) یا "workflow_dispatch"
+# (دکمه‌ی Run workflow - چه با کلیک خودِ کاربر، چه با سرویس خارجیِ cron-job.org از طریق API).
+# فقط برای اجرای "schedule" محدودیتِ بازه‌ی ساعتی (EARLIEST/LATEST_HOUR) اعمال می‌شه؛ اجرای دستی
+# همیشه کار می‌کنه، چون خودش قبلاً زمانش رو عمداً انتخاب کرده (کاربر یا سرویسِ خارجی).
+EVENT_NAME = os.environ.get("EVENT_NAME", "").strip()
+IS_DISPATCH = EVENT_NAME == "workflow_dispatch"
 
 WORKFLOW_DISPATCH_URL = "https://github.com/mohsenkarami8900/coventry-bot/actions/workflows/daily.yml"
 
@@ -380,8 +390,9 @@ def main() -> int:
     # قبلاً اینجا چک می‌کردیم که ساعت لندن دقیقاً ۱۰ باشه، ولی این باعث می‌شد اگه گیت‌هاب دیر اجرا کنه
     # (مثلاً ساعت ۱۶)، ربات کلاً از ارسال صرف‌نظر کنه و اون روز هیچی نره. حالا به‌جاش فقط یه بازه‌ی
     # معقول چک می‌کنیم (نه خیلی زود، نه خیلی دیر) و تکراری‌نبودن ارسال رو last_run.json تضمین می‌کنه.
-    if not FORCE_RUN and not (EARLIEST_HOUR <= now.hour < LATEST_HOUR):
-        print(f"London time is {now:%H:%M}, outside the {EARLIEST_HOUR}:00-{LATEST_HOUR}:00 window - skipping.")
+    if not FORCE_RUN and not IS_DISPATCH and not (EARLIEST_HOUR <= now.hour < LATEST_HOUR):
+        print(f"London time is {now:%H:%M} (event={EVENT_NAME or 'schedule'}), outside the "
+              f"{EARLIEST_HOUR}:00-{LATEST_HOUR}:00 auto-send window - skipping (run manually if needed).")
         return 0
 
     if not DRY_RUN and not BOT_TOKEN:

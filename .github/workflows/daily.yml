@@ -14,7 +14,10 @@ on:
     # استفاده می‌شه که اگه هر روز یه پینگِ موفقیت ازش نگیره، خودش (نه از طریق
     # گیت‌هاب) مستقیم به تلگرام پیام می‌ده. bot.py این پینگ رو بعد از ارسالِ موفق
     # می‌زنه (ping_healthcheck). جزئیات کامل توی README یا پیامِ راه‌اندازی هست.
-    - cron: "*/30 8-21 * * *"
+    # محدود شد به ۸ تا ۱۱ UTC (بازه‌ی خودکارِ ارسال توی bot.py هم همینه: ۹ تا ۱۱ لندن) تا
+    # وقتی ریپو هنوز Private هست (هنوز تأیید نکردی - پایین توضیح دادم)، دقیقه‌های Actions
+    # کمتر مصرف شه. بعد از Public شدن، هزینه‌ای نداره و می‌شه بازش گذاشت.
+    - cron: "*/30 8-11 * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -50,6 +53,7 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
           HC_PING_URL: ${{ secrets.HC_PING_URL }}
+          EVENT_NAME: ${{ github.event_name }}
           CHANNEL: "@Coventryexchange"
           MODE: ${{ github.event.inputs.mode || 'both' }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}

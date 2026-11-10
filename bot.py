@@ -31,24 +31,20 @@ FORCE_RUN = os.environ.get("FORCE_RUN", "") == "1"  # نادیده گرفتن چ
 DRY_RUN = os.environ.get("DRY_RUN", "") == "1"  # فقط چاپ کن، ارسال نکن
 MODE = (os.environ.get("MODE", "").strip().lower() or "both")  # both / text / image
 
-# --- زمان‌بندیِ ساده: یه تلاشِ خودکار دقیقاً حوالیِ ۱۰:۱۰ صبحِ لندن ---
-# daily.yml دو تا cron داره (یکی برای فصل تابستان UK با یکی برای زمستون) که هر دو حوالیِ
-# ۱۰:۱۰ لندن اجرا می‌شن؛ این بازه‌ی باریک پایین مشخص می‌کنه کدومش واقعاً مجاز به ارسالِ
-# خودکاره (اونی که دقیقاً توی بازه افتاد) و کدوم فقط رد می‌شه بدون ارسال.
-AUTO_SEND_START = (10, 10)   # از این دقیقه به بعد خودکار مجاز به ارسال
-AUTO_SEND_END = (10, 30)     # از این دقیقه به بعد دیگه خودکار نفرست - خودِ کاربر ساعت ۱۰:۳۰ چک و
-                             # در صورت نیاز دستی اجرا می‌کنه (لینک پایین پیام هشدار).
+# --- زمان‌بندیِ ساده: یه تلاشِ خودکار در روز، هدف حوالیِ ۱۰:۰۷ صبحِ لندن ---
+# daily.yml دو تا cron داره (یکی برای فصل تابستان UK با یکی برای زمستون) که هر روز حوالیِ
+# ۱۰:۰۷ لندن شلیک می‌شن. مهم: اینجا دیگه هیچ بازه‌ی ساعتیِ باریکی چک نمی‌شه و هر اجرای
+# schedule (هر ساعتی که واقعاً اجرا بشه، چون گیت‌هاب گاهی دیر اجرا می‌کنه) مجاز به ارساله؛
+# تنها چیزی که جلوی تکرار رو می‌گیره last_run.json هست (یک‌بار در روز). اگه گیت‌هاب اصلاً
+# امروز اجرا نشه، هیچی خودکار نمی‌ره و خودِ کاربر دستی از لینک پایین اجرا می‌کنه.
 ALERT_HOUR = 10         # اگه تا این ساعت:دقیقه چیزی نرفته بود، به ادمین هشدار بده که دستی اجرا کنه (پشتیبان؛
 ALERT_MINUTE = 35       # پشتیبانِ داخلیه، فقط وقتی کار می‌کنه که گیت‌هاب اصلاً اجرا بشه - بک‌آپ اصلی، healthchecks.io خارجیه، پایین‌تر)
 TZ = ZoneInfo("Europe/London")
 
 # نوع رویدادی که این اجرا رو شروع کرده: "schedule" (کرون خودِ گیت‌هاب) یا "workflow_dispatch"
-# (دکمه‌ی Run workflow - چه با کلیک خودِ کاربر، چه با سرویس خارجی از طریق API).
-# فقط برای اجرای "schedule" محدودیتِ بازه‌ی ساعتی (AUTO_SEND_START/END) اعمال می‌شه؛ اجرای دستی
-# همیشه و هر ساعتی کار می‌کنه، چون خودِ کاربر عمداً زمانش رو انتخاب کرده - و چون last_run.json
-# جلوی ارسال تکراری رو می‌گیره، اگه دستی اجرا کردی و بعداً schedule هم اجرا بشه، دوباره نمی‌فرسته.
+# (دکمه‌ی Run workflow - چه با کلیک خودِ کاربر، چه با سرویس خارجی از طریق API). فقط برای لاگ/دیباگه؛
+# دیگه هیچ محدودیتی روی schedule اعمال نمی‌شه.
 EVENT_NAME = os.environ.get("EVENT_NAME", "").strip()
-IS_DISPATCH = EVENT_NAME == "workflow_dispatch"
 
 WORKFLOW_DISPATCH_URL = "https://github.com/mohsenkarami8900/coventry-bot/actions/workflows/daily.yml"
 
@@ -388,17 +384,7 @@ def save_state(state: dict):
 # -------------------------------------------------------------------- main
 def main() -> int:
     now = datetime.now(TZ)
-    # فقط حوالیِ ۱۰:۱۰ صبحِ لندن (AUTO_SEND_START تا AUTO_SEND_END) اجرای خودکار (schedule) مجاز
-    # به ارساله. daily.yml دو تا cron (یکی مناسب تابستون UK، یکی زمستون) داره که هر دو هر روز
-    # اجرا می‌شن؛ هر کدوم که توی این بازه‌ی باریک نیفته، همینجا بی‌سروصدا رد می‌شه (بدون ارسال) -
-    # و اون یکی که درست توی بازه افتاد، ارسال رو انجام می‌ده. اجرای دستی (IS_DISPATCH) از این چک
-    # معافه و هر ساعتی که بزنی کار می‌کنه.
-    now_t = (now.hour, now.minute)
-    if not FORCE_RUN and not IS_DISPATCH and not (AUTO_SEND_START <= now_t < AUTO_SEND_END):
-        print(f"London time is {now:%H:%M} (event={EVENT_NAME or 'schedule'}), outside the "
-              f"{AUTO_SEND_START[0]:02d}:{AUTO_SEND_START[1]:02d}-{AUTO_SEND_END[0]:02d}:{AUTO_SEND_END[1]:02d} "
-              f"auto-send window - skipping (run manually if needed).")
-        return 0
+    print(f"London time is {now:%Y-%m-%d %H:%M} (event={EVENT_NAME or 'schedule'}).")
 
     if not DRY_RUN and not BOT_TOKEN:
         print("BOT_TOKEN تنظیم نشده است.")
